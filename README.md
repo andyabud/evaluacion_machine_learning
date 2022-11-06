@@ -1,4 +1,4 @@
-# evaluacion_machine_learning
+# Evaluación Machine Learning
 Código usado para resolver la evaluación de Machine Learning
 
 En este ejercicio se crean distintos modelos supervisados: SVM, Decision Tree y Random Forest. Basados en una base de datos meteorológica donde la variable de respuesta es si llueve mañana o no (LluviaMan)
