@@ -16,6 +16,7 @@ library(rattle)
 library(fastDummies)
 library(e1071)
 library(kernlab)
+library(factoextra)
 
 
 # 1. Cargar base y prepararla ---------------------------------------------
@@ -124,7 +125,7 @@ lluvia_train_std <- training(lluvia_split_std)
 lluvia_test_std <- testing(lluvia_split_std)
 
 
-## 2.2 Optimizar Hiperparámetros----
+## 2.2 Optimizar hiperparámetros----
 
 ### Definir datos a ocupar
 datos_procesados <- recipes::recipe(formula = LluviaMan_Yes ~ .,
@@ -143,18 +144,18 @@ mod_svm <- parsnip::svm_linear(mode = "classification",
                       cost =  tune()) %>% # parametros a buscar en grilla
   parsnip::set_engine("kernlab") 
 
-### Definir Workflow----
+### Definir workflow----
 
 ### Desde acá se ajusta el modelo
 w_svm <- workflows::workflow() %>% 
   add_recipe(datos_procesados) %>%
   add_model(mod_svm)
 
-### Grilla de Hiperparámetros----
+### Grilla de hiperparámetros----
 hp_svm <- grid_regular(cost(range = c(-2, 4)),
                        levels= c(30))
 
-### Búsqueda de Hiperparámetros----
+### Búsqueda de hiperparámetros----
 grilla_svm <- tune_grid(object = w_svm, # El workflow que acabamos de crear
                         resamples = crossv, # La validación cruzada que creamos
                         metrics = metric_set(roc_auc), # Métrica que se ocupará para evaluar
@@ -179,17 +180,17 @@ mod_arbol <- parsnip::decision_tree(mode = "classification",
                            tree_depth = tune()) %>%  #Profundidad del árbol 
   set_engine("rpart", parms= list(split= "information"))
 
-### Definir Workflow----
+### Definir workflow----
 w_arbol <- workflow() %>% 
   add_recipe(datos_procesados) %>% 
   add_model(mod_arbol)
 
-### Grilla de Hiperparámetros----
+### Grilla de hiperparámetros----
 hp_arbol <- grid_regular(cost_complexity(range = c(0, 1), trans = NULL),
                          tree_depth(range = c(3, 8), trans = NULL),
                          levels= c(8, 3))
 
-### Búsqueda de Hiperparámetros----
+### Búsqueda de hiperparámetros----
 grilla_arbol <- tune_grid(object = w_arbol,
                           resamples = crossv,
                           metrics = metric_set(roc_auc),
@@ -213,17 +214,17 @@ mod_rf <- rand_forest(mode = "classification",
                       trees = tune()) %>%  # Cantidad de arboles
   set_engine("ranger", parms= list(split= "information"))
 
-### Definir Workflow----
+### Definir workflow----
 w_rf <- workflow() %>% 
   add_recipe(datos_procesados) %>% 
   add_model(mod_rf)
 
-### Grilla de Hiperparámetros----
+### Grilla de hiperparámetros----
 hp_rf <- grid_regular(mtry(range = c(5, 120)),
                       trees(range = c(10, 100)),
                       levels= c(3, 3))
 
-### Búsqueda de Hiperparámetros----
+### Búsqueda de hiperparámetros----
 grilla_rf <- tune_grid(object = w_rf,
                        resamples = crossv,
                        metrics = metric_set(roc_auc),
@@ -239,7 +240,9 @@ rf_best <- finalize_workflow(x= w_rf,
 rf_best
 
 
-# 2.2.d Realizar predicciones ---------------------------------------
+# 3. Comparación Modelos--------------------------------------------------------
+
+##3.1 Realizar predicciones ---------------------------------------
 
 ## Crear un dataframe con las predicciones de los modelos recién creados bajo el criterio auc
 pred_svm <- predict(svm_best, new_data = lluvia_test_std, type = "prob")
@@ -265,10 +268,86 @@ roc_auc(data  = pred_rf,
         event_level = "second")
 
 
-# 2.2.e Resultados Predicciones -------------------------------------------
+## 3.2 Resultados predicciones -------------------------------------------
 
 ### ROC_AUC Support Vector Machine: 0.900
 ### ROC_AUC Árbol de Decisión: 0.849
 ### ROC_AUC Random Forest: 0.890
 
 ### De acuerdo a los datos proporcionados, el mejor modelo en esta ocasión sería el de Support Vector Machine
+
+
+# 4. Análisis de Componentes Principales ----------------------------------
+
+## Cargar dataframe----
+data <- read.delim("data/datos_clustering.csv", sep = ",")
+## Eliminar la variable "y"----
+data_comps <- data %>% select(-y)
+## Generar el PCA a partir del dataframe----
+PCA <- prcomp(data_comps)
+## Obtener varianza acumulada a partir del PCA----
+var_acum <- data_frame(componentes = 1:10,
+                       varianza_acumulada = get_eigenvalue(PCA)$cumulative.variance.percent)
+## Plotear la varianza acumulada----
+var_acum %>% 
+  ggplot(., aes(x= componentes,
+                y = varianza_acumulada))+
+  geom_line(col = "purple", lwd= 1)+
+  theme_bw()+
+  geom_hline(yintercept = 70)
+
+## Los datos indican que a partir de 2 componentes se puede explicar el 70% de variabilidad de los datos
+
+## Crear dataset con 2 componentes----
+data_comps_70 <- data_comps %>%  select(V1, V2)
+
+
+# 5. Determinar # Clusters Ideales ---------------------------------------------------
+
+## Estandarizar proyecciones----
+proyeccion <- data_comps_70[1:1000,] %>% scale()
+
+## Plot Elbow----
+fviz_nbclust(proyeccion, kmeans, method = "wss") +
+  labs(subtitle ="Gráfico de Elbow")
+
+## Plot Silhouette----
+fviz_nbclust(proyeccion, kmeans, method = "silhouette")+
+  labs(subtitle ="Gráfico de Silhouette")
+
+## Conclusiones clustering----
+
+## Plot Elbow: El número de clusters ideales es 4
+## Plot Silhouette: El número de clusters ideales es 4
+
+
+# 6. K-Means Clustering ------------------------------------------------------
+
+## Definir tipo de modelo----
+mod_kmeans <- kmeans(x = proyeccion, centers = 4)
+
+## Plots comparación----
+datos_graf <- data.frame(PCA1= proyeccion[,1],
+                         PCA2= proyeccion[,2],
+                         Cluster = mod_kmeans$cluster,
+                         y = data$y)
+
+g1 <- ggplot(data = datos_graf, aes(x = PCA1, 
+                                    y = PCA2, 
+                                    color = factor(Cluster))) +
+  geom_point() +
+  theme_bw() 
+
+g2 <- ggplot(data = datos_graf, aes(x = PCA1, 
+                                    y = PCA2, 
+                                    color = factor(y))) +
+  geom_point() +
+  theme_bw() 
+
+gridExtra::grid.arrange(g1,g2)
+
+
+## Conclusiones ------------------------------------------------------------
+
+## Luego de observar los gráficos, se puede inferir que la metodología es la apropiada ya que la segmentación de PCA es similar a la original, 
+## teniendo esta última un factor adicional. Sin embargo son muy pocos los puntos que cambian de cluster entre la original y la generada con PCA.
